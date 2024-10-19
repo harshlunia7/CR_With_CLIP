@@ -1,5 +1,5 @@
 import os
-root = 'Font_Datasets'
+root = '/ssd_scratch/cvit/rafaelgetto'
 datasets = os.listdir(root)
 train_data = ','.join([os.path.join(root, item) for item in datasets])
 config = {
@@ -13,5 +13,5 @@ config = {
     'decompose_path': './data/decompose_27533_benchmark.txt',
     'max_len': 30,
     'lr': 1e-4,
-    'exp_name': '',
+    'exp_name': 'pre_train_clip_multi_lingual',
 }

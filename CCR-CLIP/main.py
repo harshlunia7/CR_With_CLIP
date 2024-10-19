@@ -8,8 +8,7 @@ from utils import get_data_package, convert, saver, get_alphabet
 from model import CLIP
 
 alphabet = get_alphabet()
-model = CLIP(embed_dim=2048, image_resolution=224, vision_layers=12, vision_width=768,
-             vision_patch_size=32, context_length=30, vocab_size=len(alphabet), transformer_width=512,
+model = CLIP(embed_dim=2048, context_length=30, vocab_size=len(alphabet), transformer_width=512,
              transformer_heads=8, transformer_layers=12).cuda()
 model = nn.DataParallel(model)
 
@@ -23,7 +22,7 @@ def convert_models_to_fp32(model):
         p.data = p.data.float()
         p.grad.data = p.grad.data.float()
 
-char_file = open('./data/char_3755.txt', 'r').read()
+char_file = open('./data/char_3755.txt', 'r', encoding="utf-8").read()
 char_3755 = list(char_file)
 
 
@@ -82,6 +81,7 @@ saver()
 for epoch in range(config['epoch']):
     dataloader = iter(train_loader)
     train_loader_len = len(train_loader)
+    print_interval = train_loader_len // 10
     print('training:', train_loader_len)
     for iteration in range(train_loader_len):
         model.train()
@@ -108,9 +108,14 @@ for epoch in range(config['epoch']):
         total_loss.backward()
         optimizer.step()
 
-        print('epoch:{}, iter:{}/{}, loss:{}'.format(epoch, iteration, train_loader_len, total_loss))
+        if (iteration + 1) % print_interval == 0: 
+            print('epoch:{}, iter:{}/{}, loss:{}'.format(epoch, iteration, train_loader_len, total_loss))
+    if test_loader != None:
+        val(model)
+    elif epoch % 5 == 0:
+        print(f"Saving the model as epoch_{epoch}_cr_clip.pth")
+        torch.save(model.state_dict(), f"./history/{config['exp_name']}/epoch_{epoch}_cr_clip.pth")
 
-    val(model)
     if (epoch + 1) > 10 and (epoch + 1) % 2 == 0:
         for p in optimizer.param_groups:
             p['lr'] *= 0.8
