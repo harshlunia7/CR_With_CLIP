@@ -1,3 +1,7 @@
+import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -7,19 +11,22 @@ from model.transformer import Transformer
 from config import config
 
 from util import get_data_package, converter, tensor2str, \
-    saver, get_alphabet, must_in_screen, convert_char, get_radical_alphabet
+    saver, get_alphabet, must_in_screen, convert_char,\
+          get_radical_alphabet, load_vit_encoder_weights
 
 from torch.utils.tensorboard import SummaryWriter
 writer = SummaryWriter('runs/{}'.format(datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')))
 
 saver()
-must_in_screen()
+# must_in_screen()
 
 alphabet = get_alphabet()
 radical_alphabet = get_radical_alphabet()
-print('alphabet',alphabet)
+print('alphabet', alphabet)
 
-model = Transformer().cuda()
+model = Transformer(config)
+
+model = load_vit_encoder_weights(model, config['encoder_checkpoint_path']).cuda()
 model = nn.DataParallel(model)
 
 if config['resume'].strip() != '':
@@ -43,7 +50,7 @@ clip_model = CLIP(embed_dim=2048, context_length=30, vocab_size=len(radical_alph
              transformer_heads=8, transformer_layers=12).cuda()
 clip_model = nn.DataParallel(clip_model)
 clip_model.load_state_dict(torch.load(config['radical_model']), strict=False)
-char_file = open(config['alpha_path'], 'r').read()
+char_file = open(config['alpha_path'], 'r', encoding="utf-8").read()
 chars = list(char_file)
 tmp_text = convert_char(chars)
 text_features = []
@@ -60,7 +67,7 @@ with torch.no_grad():
     text_features.append(torch.ones([1, 2048]).cuda())
     text_features = torch.cat(text_features, dim=0).detach()
 
-def train(epoch, iteration, image, length, text_input, text_gt):
+def train(epoch, iteration, image, length, text_input, text_gt, print_interval):
     global times
     model.train()
     optimizer.zero_grad()
@@ -74,13 +81,12 @@ def train(epoch, iteration, image, length, text_input, text_gt):
     text_pred = result['pred']
     text_pred = text_pred / text_pred.norm(dim=1, keepdim=True)
     final_res =  text_pred @ text_features.t()
+    # print(text_pred.shape, text_gt.shape, final_res.shape)
 
     loss_rec = criterion(final_res, text_gt)
     loss_dis = - criterion_dis(text_pred, reg)
     loss = loss_rec + 0.001 * loss_dis
 
-    print('epoch : {} | iter : {}/{} | loss_rec : {} | loss_dis : {}'.format(epoch, iteration, len(train_loader),
-                                                                             loss_rec, loss_dis))
     loss.backward()
     optimizer.step()
 
@@ -88,6 +94,8 @@ def train(epoch, iteration, image, length, text_input, text_gt):
     writer.add_scalar('loss_rec', loss_rec, times)
     writer.add_scalar('loss_dis', loss_dis, times)
     times += 1
+
+    return loss_rec.item(), loss_dis.item(), loss.item()
 
 test_time = 0
 
@@ -97,13 +105,15 @@ def test(epoch):
     torch.cuda.empty_cache()
     global test_time
     test_time += 1
-    torch.save(model.state_dict(), './history/{}/model.pth'.format(config['exp_name']))
+    # torch.save(model.state_dict(), './history/{}/model.pth'.format(config['exp_name']))
     result_file = open('./history/{}/result_file_test_{}.txt'.format(config['exp_name'], test_time), 'w+', encoding='utf-8')
 
     print("Start Eval!")
     model.eval()
     dataloader = iter(test_loader)
     test_loader_len = len(test_loader)
+    # test_loader_len = 10
+
     print('test:', test_loader_len)
 
     correct = 0
@@ -167,6 +177,7 @@ def test(epoch):
 
             start += i
             total += 1
+        if (iteration + 1) % (test_loader_len // 10) == 0:
             print('{} | {} | {} | {} | {} | {}'.format(total, pred, gt, state, text_prob_list[i],
                                                             correct / total))
             result_file.write(
@@ -192,18 +203,36 @@ if __name__ == '__main__':
         exit(0)
 
     for epoch in range(config['epoch']):
-
-        torch.save(model.state_dict(), './history/{}/model.pth'.format(config['exp_name']))
-
         dataloader = iter(train_loader)
         train_loader_len = len(train_loader)
+        # train_loader_len = 100
+        print_interval = train_loader_len // 10
+
         print('training:', train_loader_len)
+
+        num_batches = 0
+        total_loss = 0
+        total_rec_loss = 0
+        total_dis_loss = 0
+
         for iteration in range(train_loader_len):
             data = dataloader.next()
             image, label, _ = data
             image = torch.nn.functional.interpolate(image, size=(config['imageH'], config['imageW']))
 
             length, text_input, text_gt, string_label = converter(label)
-            train(epoch, iteration, image, length, text_input, text_gt)
+            loss_rec_value, loss_dis_value, loss_value = train(epoch, iteration, image, length, text_input, text_gt, print_interval)
+
+            total_rec_loss += loss_rec_value
+            total_dis_loss += loss_dis_value
+            total_loss += loss_value
+            num_batches += 1
+
+            if (iteration + 1) % print_interval == 0: 
+                print(f"epoch : {epoch} | iter : {iteration}/{train_loader_len} | avg_loss_rec : {(total_rec_loss / num_batches):.3f} | avg_loss_dis : {(total_dis_loss / num_batches):.3f} | avg_loss : {(total_loss / num_batches):.3f}")
+        
+        if (epoch % 5) == 0:
+            torch.save(model.state_dict(), f"./history/{config['exp_name']}/model_{epoch}.pth")
+        
         test(epoch)
         scheduler.step()

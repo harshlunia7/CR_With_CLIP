@@ -9,6 +9,7 @@ __pycache__/
 slurm*.out
 pretrain*sh
 history/
+runs/
 
 # Thumbnails
 ._*

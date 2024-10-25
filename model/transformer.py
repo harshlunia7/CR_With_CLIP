@@ -7,6 +7,9 @@ import numpy as np
 from torch.autograd import Variable
 from util import get_alphabet
 
+from model.vit_encoder import PretrainVisionTransformerEncoder
+from functools import partial
+
 torch.set_printoptions(precision=None, threshold=1000000, edgeitems=None, linewidth=None, profile=None)
 alphabet = get_alphabet()
 
@@ -298,8 +301,10 @@ class Embeddings(nn.Module):
 
 class Decoder(nn.Module):
 
-    def __init__(self):
+    def __init__(self, encoder_type):
         super(Decoder, self).__init__()
+
+        self.encoder_type = encoder_type
 
         self.mask_multihead = MultiHeadedAttention(h=4, d_model=1024, dropout=0.1)
         self.mul_layernorm1 = LayerNorm(features=1024)
@@ -316,9 +321,13 @@ class Decoder(nn.Module):
 
         result = text
         result = self.mul_layernorm1(result + self.mask_multihead(result, result, result, mask=mask)[0])
+        
+        if self.encoder_type == 'resnet':
+            b, c, h, w = conv_feature.shape
+            conv_feature = conv_feature.view(b, c, h * w).permute(0, 2, 1).contiguous()
+        else:
+            conv_feature = conv_feature.contiguous()
 
-        b, c, h, w = conv_feature.shape
-        conv_feature = conv_feature.view(b, c, h * w).permute(0, 2, 1).contiguous()
         word_image_align, attention_map = self.multihead(result, conv_feature, conv_feature, mask=None)
         result = self.mul_layernorm2(result + word_image_align)
 
@@ -328,15 +337,27 @@ class Decoder(nn.Module):
 
 class Transformer(nn.Module):
 
-    def __init__(self):
+    def __init__(self, config):
         super(Transformer, self).__init__()
 
+        self.config = config
         self.word_n_class = len(alphabet)
         self.embedding_word = Embeddings(512, self.word_n_class)
         self.pe = PositionalEncoding(d_model=512, dropout=0.1, max_len=7000)
-        self.encoder = ResNet(num_in=3, block=BasicBlock, layers=[3,4,6,3]).cuda()
+        
+        if self.config['encoder'] == 'resnet':
+            self.encoder = ResNet(num_in=3, block=BasicBlock, layers=[3,4,6,3])
+        else:
+            self.encoder = PretrainVisionTransformerEncoder(
+                img_size=(32, 128), num_classes=0, patch_size=4, embed_dim=384, depth=12, 
+                num_heads=6, mlp_ratio=4, qkv_bias=True,
+                norm_layer=partial(nn.LayerNorm, eps=1e-6))
+            self.encoder_linear_norm = nn.Sequential(
+                nn.Linear(self.encoder.num_features, 1024),
+                nn.LayerNorm(1024),
+            )
 
-        self.decoder = Decoder()
+        self.decoder = Decoder(self.config['encoder'])
         self.generator_word = Generator(1024, 2048)
 
 
@@ -345,13 +366,17 @@ class Transformer(nn.Module):
         if conv_feature is None:
             conv_feature = self.encoder(image)
 
+            if self.config['encoder'] != 'resnet':
+                conv_feature = self.encoder_linear_norm(conv_feature)
+
+
         if text_length is None:
             return {
                 'conv': conv_feature,
             }
 
         text_embedding = self.embedding_word(text_input)
-        postion_embedding = self.pe(torch.zeros(text_embedding.shape).cuda()).cuda()
+        postion_embedding = self.pe(torch.zeros(text_embedding.shape).cuda())
         text_input_with_pe = torch.cat([text_embedding, postion_embedding], 2)
         batch, seq_len, _ = text_input_with_pe.shape
 

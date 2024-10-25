@@ -10,7 +10,7 @@ from config import config
 from shutil import copyfile
 
 mse_loss = nn.MSELoss()
-alphabet_character_file = open(config['alpha_path'])
+alphabet_character_file = open(config['alpha_path'], 'r', encoding="utf-8")
 alphabet_character = list(alphabet_character_file.read().strip())
 alphabet_character_raw = ['START']
 
@@ -24,6 +24,81 @@ alp2num_character = {}
 
 for index, char in enumerate(alphabet_character):
     alp2num_character[char] = index
+
+r2num = {}
+alphabet_radical = []
+alphabet_radical.append('PAD')
+lines = open(config['radical_path'], 'r', encoding="utf-8").readlines()
+for line in lines:
+    alphabet_radical.append(line.strip('\n'))
+alphabet_radical.append('$')
+for index, char in enumerate(alphabet_radical):
+    r2num[char] = index
+
+dict_file = open(config['decompose_path'], 'r', encoding="utf-8").readlines()
+char_radical_dict = {}
+for line in dict_file:
+    line = line.strip('\n')
+    try:
+        char, r_s = line.split(':')
+    except:
+        char, r_s = ':', ':'
+    char_radical_dict[char] = list(''.join(r_s.split(' ')))
+
+def load_state_dict(model, state_dict, prefix='', ignore_missing="relative_position_index"):
+    missing_keys = []
+    unexpected_keys = []
+    error_msgs = []
+    # copy state_dict so _load_from_state_dict can modify it
+    metadata = getattr(state_dict, '_metadata', None)
+    state_dict = state_dict.copy()
+    if metadata is not None:
+        state_dict._metadata = metadata
+    
+    def load(module, prefix=''):
+        local_metadata = {} if metadata is None else metadata.get(
+            prefix[:-1], {})
+        module._load_from_state_dict(
+            state_dict, prefix, local_metadata, True, missing_keys, unexpected_keys, error_msgs)
+        for name, child in module._modules.items():
+            if child is not None:
+                load(child, prefix + name + '.')
+
+    load(model, prefix=prefix)
+    
+    warn_missing_keys = []
+    ignore_missing_keys = []
+    for key in missing_keys:
+        keep_flag = True
+        for ignore_key in ignore_missing.split('|'):
+            if ignore_key in key:
+                keep_flag = False
+                break
+        if keep_flag:
+            warn_missing_keys.append(key)
+        else:
+            ignore_missing_keys.append(key)
+
+    missing_keys = warn_missing_keys
+    if len(missing_keys) > 0:
+        print("Weights of {} not initialized from pretrained model: {}".format(
+            model.__class__.__name__, missing_keys))
+    if len(unexpected_keys) > 0:
+        print("Weights from pretrained model not used in {}: {}".format(
+            model.__class__.__name__, unexpected_keys))
+    if len(ignore_missing_keys) > 0:
+        print("Ignored weights of {} not initialized from pretrained model: {}".format(
+            model.__class__.__name__, ignore_missing_keys))
+    if len(error_msgs) > 0:
+        print('\n'.join(error_msgs))
+    
+    return model
+    
+
+def load_vit_encoder_weights(model, encoder_checkpoint_path):
+    checkpoint_model =  torch.load(encoder_checkpoint_path, map_location='cpu')
+    checkpoint_model = checkpoint_model['model']
+    return load_state_dict(model, checkpoint_model, prefix='')
 
 def get_dataloader(root,shuffle=False):
     if root.endswith('pkl'):
@@ -52,33 +127,17 @@ def get_data_package():
     )
 
     test_dataset = []
-    for dataset_root in config['test_dataset'].split(','):
-        _ , dataset = get_dataloader(dataset_root,shuffle=True)
-        test_dataset.append(dataset)
-    test_dataset_total = torch.utils.data.ConcatDataset(test_dataset)
-
-    test_dataloader = torch.utils.data.DataLoader(
-        test_dataset_total, batch_size=config['batch'], shuffle=False, num_workers=8,
-    )
+    test_dataloader = None
+    if len(config['test_dataset']) > 0:
+        for dataset_root in config['test_dataset'].split(','):
+            _ , dataset = get_dataloader(dataset_root,shuffle=True)
+            test_dataset.append(dataset)
+        test_dataset_total = torch.utils.data.ConcatDataset(test_dataset)
+        test_dataloader = torch.utils.data.DataLoader(
+            test_dataset_total, batch_size=config['batch'], shuffle=False, num_workers=8,
+        )
 
     return train_dataloader, test_dataloader
-
-r2num = {}
-alphabet_radical = []
-alphabet_radical.append('PAD')
-lines = open(config['radical_path'], 'r').readlines()
-for line in lines:
-    alphabet_radical.append(line.strip('\n'))
-alphabet_radical.append('$')
-for index, char in enumerate(alphabet_radical):
-    r2num[char] = index
-
-dict_file = open(config['decompose_path'], 'r').readlines()
-char_radical_dict = {}
-for line in dict_file:
-    line = line.strip('\n')
-    char, r_s = line.split(':')
-    char_radical_dict[char] = r_s.split(' ')
 
 def convert_char(label):
     r_label = []
@@ -152,7 +211,7 @@ def saver():
         shutil.rmtree('./history/{}'.format(config['exp_name']))
     except:
         pass
-    os.mkdir('./history/{}'.format(config['exp_name']))
+    os.makedirs(f"./history/{config['exp_name']}", exist_ok=True)
 
     import time
 
@@ -162,12 +221,3 @@ def saver():
     f = open(os.path.join('./history', config['exp_name'], str(localtime)),'w+')
     f.close()
 
-    src_folder = './'
-    exp_name = config['exp_name']
-    dst_folder = os.path.join('./history', exp_name)
-
-    file_list = [f for f in os.listdir(src_folder) if os.path.isfile(os.path.join(src_folder, f))]
-    for file_name in file_list:
-        src = os.path.join(src_folder, file_name)
-        dst = os.path.join(dst_folder, file_name)
-        copyfile(src, dst)
