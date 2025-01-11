@@ -29,12 +29,33 @@ model = Transformer(config)
 model = load_vit_encoder_weights(model, config['encoder_checkpoint_path']).cuda()
 model = nn.DataParallel(model)
 
-if config['resume'].strip() != '':
-    model.load_state_dict(torch.load(config['resume']))
-    print('loading！！！')
-
 optimizer = optim.Adadelta(model.parameters(), lr=config['lr'], rho=0.9, weight_decay=1e-4)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=1)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=50, T_mult=2)
+start_epoch = 0
+
+if config['resume'].strip() != '':
+    # model.load_state_dict(torch.load(config['resume']))
+    checkpoint = torch.load(config['resume'])
+    model.load_state_dict(checkpoint['model_state_dict'])
+    # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    # scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    # scheduler.step()
+    # start_epoch = checkpoint['epoch'] + 1
+    # # last_lr = scheduler.get_last_lr()[0]  # Get current learning rate
+    # # print('last_lr', last_lr)
+    # # for param_group in optimizer.param_groups:
+    # #     param_group['lr'] = last_lr  # Set the starting lr to maintain continuity
+    # # scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=30, T_mult=2)
+    # new_T_0 = 40  # new restart period
+    # checkpoint['scheduler_state_dict']['T_0'] = new_T_0  # Update T_0 in state dict
+    # scheduler.load_state_dict(checkpoint['scheduler_state_dict'])  # Reload modified scheduler state
+
+    # # Ensure the last LR is maintained by using the optimizer’s current learning rate
+    # # for i, param_group in enumerate(optimizer.param_groups):
+    # #     print( scheduler.base_lrs[i],  param_group['lr'])
+    # #     scheduler.base_lrs[i] = param_group['lr']  # Align base learning rates to optimizer
+
+    print('loading！！！')
 
 criterion = torch.nn.CrossEntropyLoss().cuda()
 criterion_dis = torch.nn.MSELoss().cuda()
@@ -129,7 +150,7 @@ def test(epoch):
         batch = image.shape[0]
         pred = torch.zeros(batch,1).long().cuda()
         image_features = None
-        prob = torch.zeros(batch, max_length).float()
+        # prob = torch.zeros(batch, max_length).float()
 
         for i in range(max_length):
             length_tmp = torch.zeros(batch).long().cuda() + i + 1
@@ -139,7 +160,7 @@ def test(epoch):
             prediction = prediction / prediction.norm(dim=1, keepdim=True)
             prediction = prediction @ text_features.t()
             now_pred = torch.max(torch.softmax(prediction,1), 1)[1]
-            prob[:,i] = torch.max(torch.softmax(prediction,1), 1)[0]
+            # prob[:,i] = torch.max(torch.softmax(prediction,1), 1)[0]
             pred = torch.cat((pred, now_pred.view(-1,1)), 1)
             image_features = result['conv']
 
@@ -150,7 +171,7 @@ def test(epoch):
             start += i
 
         text_pred_list = []
-        text_prob_list = []
+        # text_prob_list = []
         for i in range(batch):
             now_pred = []
             for j in range(max_length):
@@ -160,10 +181,10 @@ def test(epoch):
                     break
             text_pred_list.append(torch.Tensor(now_pred)[1:].long().cuda())
 
-            overall_prob = 1.0
-            for j in range(len(now_pred)):
-                overall_prob *= prob[i][j]
-            text_prob_list.append(overall_prob)
+            # overall_prob = 1.0
+            # for j in range(len(now_pred)):
+            #     overall_prob *= prob[i][j]
+            # text_prob_list.append(overall_prob)
 
         start = 0
         for i in range(batch):
@@ -178,10 +199,9 @@ def test(epoch):
             start += i
             total += 1
         if (iteration + 1) % (test_loader_len // 10) == 0:
-            print('{} | {} | {} | {} | {} | {}'.format(total, pred, gt, state, text_prob_list[i],
-                                                            correct / total))
+            print('{} | {} | {} | {} | {} '.format(total, pred, gt, state, correct / total))
             result_file.write(
-                '{} | {} | {} | {} | {} \n'.format(total, pred, gt, state, text_prob_list[i]))
+                '{} | {} | {} | {} \n'.format(total, pred, gt, state))
 
 
     print("ACC : {}".format(correct/total))
@@ -189,7 +209,13 @@ def test(epoch):
 
     if correct/total > best_acc:
         best_acc = correct / total
-        torch.save(model.state_dict(), './history/{}/best_model.pth'.format(config['exp_name']))
+        torch.save({
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'scheduler_state_dict': scheduler.state_dict(),
+                        'epoch': epoch,
+                    }, f"./history/{config['exp_name']}/best_model.pth")
+        # torch.save(model.state_dict(), f"./history/{config['exp_name']}/best_model.pth")
 
     f = open('./history/{}/record.txt'.format(config['exp_name']),'a+',encoding='utf-8')
     f.write("Epoch : {} | ACC : {}\n".format(epoch, correct/total))
@@ -202,10 +228,10 @@ if __name__ == '__main__':
         test(-1)
         exit(0)
 
-    for epoch in range(config['epoch']):
+    for epoch in range(start_epoch, config['epoch']):
         dataloader = iter(train_loader)
         train_loader_len = len(train_loader)
-        # train_loader_len = 100
+        # train_loader_len = 10
         print_interval = train_loader_len // 10
 
         print('training:', train_loader_len)
@@ -214,6 +240,8 @@ if __name__ == '__main__':
         total_loss = 0
         total_rec_loss = 0
         total_dis_loss = 0
+
+        writer.add_scalar('lr', scheduler.get_last_lr()[-1], times)
 
         for iteration in range(train_loader_len):
             data = dataloader.next()
@@ -231,8 +259,13 @@ if __name__ == '__main__':
             if (iteration + 1) % print_interval == 0: 
                 print(f"epoch : {epoch} | iter : {iteration}/{train_loader_len} | avg_loss_rec : {(total_rec_loss / num_batches):.3f} | avg_loss_dis : {(total_dis_loss / num_batches):.3f} | avg_loss : {(total_loss / num_batches):.3f}")
         
-        if (epoch % 5) == 0:
-            torch.save(model.state_dict(), f"./history/{config['exp_name']}/model_{epoch}.pth")
-        
+        if (epoch % 3) == 0:
+            # torch.save(model.state_dict(), f"./history/{config['exp_name']}/model_{epoch}.pth")
+            torch.save({
+                            'model_state_dict': model.state_dict(),
+                            'optimizer_state_dict': optimizer.state_dict(),
+                            'scheduler_state_dict': scheduler.state_dict(),
+                            'epoch': epoch,
+                        }, f"./history/{config['exp_name']}/model_{epoch}.pth")
         test(epoch)
         scheduler.step()

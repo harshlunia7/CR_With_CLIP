@@ -2,12 +2,12 @@
 #SBATCH -A rafaelgetto
 #SBATCH --nodes=1       # Number of nodes
 #SBATCH --gres=gpu:4    # Number of GPUs per node
-#SBATCH --nodelist=gnode072     # Specifies the node or nodes by name where the job has to be executed
+#SBATCH --nodelist=gnode091     # Specifies the node or nodes by name where the job has to be executed
 #SBATCH --ntasks=4              # Total number of tasks across all nodes
 #SBATCH --ntasks-per-node=4     # Number of tasks per node
 #SBATCH --cpus-per-task=4       # Number of CPU cores per task
-#SBATCH --mem-per-cpu=2G        # specifies the amount of memory (RAM) allocated per CPU core
-#SBATCH --time=60:00:00         # Time limit: 60 hrs
+#SBATCH --mem-per-cpu=5G        # specifies the amount of memory (RAM) allocated per CPU core
+#SBATCH --time=5-00:00:00         # Time limit: days-hours:minutes:seconds
 #SBATCH --mail-type=BEGIN,END,FAIL      # Mail events
 
 # --exclude=<node_name>: Excludes specific nodes from being used by your job.
@@ -29,8 +29,8 @@ echo "Creating ssd_scratch/cvit/rafaelgetto directory";
 mkdir /ssd_scratch/cvit/rafaelgetto;
 
 echo "Sending all the dataset files to ssd_scratch";
-rsync -aP rafaelgetto@ada.iiit.ac.in:/share3/rafaelgetto/cr_clip_sup_english_chinese_max_35_train_data /ssd_scratch/cvit/rafaelgetto;
-rsync -aP rafaelgetto@ada.iiit.ac.in:/share3/rafaelgetto/cr_clip_sup_english_chinese_max_35_test_data /ssd_scratch/cvit/rafaelgetto;
+rsync -aP rafaelgetto@ada.iiit.ac.in:/share3/rafaelgetto/str_cr_supervised_bctr_arl_train_lmdb /ssd_scratch/cvit/rafaelgetto;
+rsync -aP rafaelgetto@ada.iiit.ac.in:/share3/rafaelgetto/str_cr_supervised_bctr_arl_val_lmdb /ssd_scratch/cvit/rafaelgetto;
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 python train.py;
 

@@ -6,7 +6,7 @@ import torch.nn as nn
 import copy
 
 from data.lmdbReader import lmdbDataset, resizeNormalize
-from config import config
+from eval_config import config
 from shutil import copyfile
 
 mse_loss = nn.MSELoss()
@@ -116,16 +116,6 @@ def get_dataloader(root,shuffle=False):
 
 
 def get_data_package():
-    train_dataset = []
-    for dataset_root in config['train_dataset'].split(','):
-        _ , dataset = get_dataloader(dataset_root,shuffle=True)
-        train_dataset.append(dataset)
-    train_dataset_total = torch.utils.data.ConcatDataset(train_dataset)
-
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset_total, batch_size=config['batch'], shuffle=True, num_workers=4,
-    )
-
     test_dataset = []
     test_dataloader = None
     if len(config['test_dataset']) > 0:
@@ -137,7 +127,7 @@ def get_data_package():
             test_dataset_total, batch_size=config['batch'], shuffle=False, num_workers=4,
         )
 
-    return train_dataloader, test_dataloader
+    return test_dataloader
 
 def convert_char(label):
     r_label = []

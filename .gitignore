@@ -10,6 +10,7 @@ slurm*.out
 pretrain*sh
 history/
 runs/
+past_trained_slurm_files/
 
 # Thumbnails
 ._*
